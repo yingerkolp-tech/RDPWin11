@@ -1,0 +1,104 @@
+name: RDP Linux with GUI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp-linux-gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Install dependencies and desktop environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xrdp ufw xfce4 xfce4-goodies
+
+      - name: Configure XRDP to use XFCE desktop
+        run: |
+          # Enable XRDP service
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          
+          # Configure XRDP to use XFCE desktop
+          echo "xfce4-session" | sudo tee /etc/xrdp/startwm.sh > /dev/null
+          sudo chmod +x /etc/xrdp/startwm.sh
+          
+          # Restart XRDP to apply changes
+          sudo systemctl restart xrdp
+          
+          # Allow RDP port through firewall
+          sudo ufw allow 3389/tcp
+          sudo ufw --force enable
+
+      - name: Create RDP user with secure password
+        id: rdp_user
+        run: |
+          # Generate a random password
+          RDP_USER="rdpuser"
+          RDP_PASS=$(openssl rand -base64 12)
+          # Create user (if not exists)
+          if ! id "$RDP_USER" &>/dev/null; then
+            sudo adduser --disabled-password --gecos "" "$RDP_USER"
+            echo "$RDP_USER:$RDP_PASS" | sudo chpasswd
+          else
+            echo "$RDP_USER:$RDP_PASS" | sudo chpasswd
+          fi
+          # Add user to groups for RDP and sudo (optional)
+          sudo usermod -aG sudo "$RDP_USER"
+          sudo usermod -aG xrdp "$RDP_USER"
+          # Export credentials for later steps
+          echo "RDP_USER=$RDP_USER" >> $GITHUB_ENV
+          echo "RDP_PASS=$RDP_PASS" >> $GITHUB_ENV
+          echo "RDP_CREDS=User: $RDP_USER | Password: $RDP_PASS" >> $GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo systemctl enable --now tailscaled
+
+      - name: Establish Tailscale connection
+        id: tailscale
+        run: |
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=linux-runner-${{ github.run_id }}
+          # Wait for Tailscale to assign an IP
+          TS_IP=""
+          retries=0
+          while [ -z "$TS_IP" ] && [ $retries -lt 10 ]; do
+            TS_IP=$(tailscale ip -4 || true)
+            if [ -z "$TS_IP" ]; then
+              sleep 5
+              ((retries++))
+            fi
+          done
+          if [ -z "$TS_IP" ]; then
+            echo "Tailscale IP not assigned. Exiting."
+            exit 1
+          fi
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Verify RDP accessibility
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          # Test TCP connection to XRDP port
+          if ! timeout 5 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null; then
+            echo "TCP connection to RDP port 3389 failed"
+            exit 1
+          fi
+          echo "TCP connectivity successful!"
+
+      - name: Maintain connection and display credentials
+        run: |
+          echo ""
+          echo "=== RDP ACCESS (Linux/XRDP with XFCE GUI) ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: $RDP_USER"
+          echo "Password: $RDP_PASS"
+          echo "Desktop Environment: XFCE4"
+          echo "=================================="
+          # Keep runner active (sleep loop) until manually cancelled
+          while true; do
+            echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
+            sleep 300
+          done
