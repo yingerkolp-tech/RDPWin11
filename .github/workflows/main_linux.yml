@@ -11,26 +11,17 @@ jobs:
     steps:
       - name: Configure Core XRDP Settings
         run: |
-          # Install XRDP and dependencies
           sudo apt-get update
           sudo apt-get install -y xrdp ufw
-          
-          # Enable XRDP service
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
-          
-          # Configure firewall for RDP
           sudo ufw allow 3389/tcp
           sudo ufw --force enable
-          
-          # Restart XRDP service
           sudo systemctl restart xrdp
 
       - name: Install Desktop Environment (XFCE4)
         run: |
           sudo apt-get install -y xfce4 xfce4-goodies dbus-x11
-          
-          # Configure XRDP to use XFCE desktop
           echo "xfce4-session" | sudo tee /etc/xrdp/startwm.sh > /dev/null
           sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl restart xrdp
@@ -38,115 +29,42 @@ jobs:
       - name: Create RDP User with Secure Password
         id: rdp_user
         run: |
-          set -e  # Exit on any error
-          echo "Creating RDP user..."
-          
-          # Generate a secure password using similar logic to Windows version
           RDP_USER="RDP"
-          
-          # Create character sets (similar to Windows PowerShell version)
-          UPPER=$(echo {A..Z})
-          LOWER=$(echo {a..z})
-          NUMBER=$(echo {0..9})
-          SPECIAL=$(echo '!@#$%^&*()_+-=[]{}|;:,.<>?')
-          
-          # Generate password parts
-          PASS_UPPER=$(echo $UPPER | fold -w1 | shuf | head -4 | tr -d '\n')
-          PASS_LOWER=$(echo $LOWER | fold -w1 | shuf | head -4 | tr -d '\n')
-          PASS_NUMBER=$(echo $NUMBER | fold -w1 | shuf | head -4 | tr -d '\n')
-          PASS_SPECIAL=$(echo $SPECIAL | fold -w1 | shuf | head -4 | tr -d '\n')
-          
-          # Combine and shuffle
-          RAW_PASSWORD="${PASS_UPPER}${PASS_LOWER}${PASS_NUMBER}${PASS_SPECIAL}"
-          PASSWORD=$(echo "$RAW_PASSWORD" | fold -w1 | shuf | tr -d '\n')
-          
-          echo "Generated password for user: $RDP_USER"
-          
-          # Create user if it doesn't exist
+          RDP_PASS=$(openssl rand -base64 12)
           if ! id "$RDP_USER" &>/dev/null; then
-            echo "User does not exist, creating..."
-            sudo adduser --disabled-password --gecos "" "$RDP_USER"
-            echo "$RDP_USER:$PASSWORD" | sudo chpasswd
-            echo "User created successfully"
-          else
-            echo "User exists, updating password..."
-            echo "$RDP_USER:$PASSWORD" | sudo chpasswd
+            sudo adduser --allow-bad-names --disabled-password --gecos "" "$RDP_USER"
           fi
-          
-          # Add user to necessary groups
-          echo "Adding user to groups..."
-          sudo usermod -aG sudo "$RDP_USER" || echo "Warning: Failed to add to sudo group"
-          sudo usermod -aG xrdp "$RDP_USER" || echo "Warning: Failed to add to xrdp group"
-          sudo usermod -aG "Remote Desktop Users" "$RDP_USER" 2>/dev/null || true || echo "Note: Remote Desktop Users group may not exist on Linux"
-          
-          # Export credentials
-          echo "RDP_CREDS=User: $RDP_USER | Password: $PASSWORD" >> $GITHUB_ENV
-          echo "Exported credentials to GITHUB_ENV"
-          
-          # Verify user creation
-          if ! id "$RDP_USER" &>/dev/null; then
-            echo "ERROR: User creation failed"
-            exit 1
-          fi
-          echo "User verification successful"
+          echo "$RDP_USER:$RDP_PASS" | sudo chpasswd
+          sudo usermod -aG sudo "$RDP_USER" 2>/dev/null || true
+          sudo usermod -aG xrdp "$RDP_USER" 2>/dev/null || true
+          echo "RDP_CREDS=User: $RDP_USER | Password: $RDP_PASS" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
-          set -e  # Exit on any error
-          echo "Installing Tailscale..."
-          
-          # Install Tailscale using the official script
           curl -fsSL https://tailscale.com/install.sh | sh
-          echo "Tailscale installed successfully"
-          
           sudo systemctl enable --now tailscaled
-          echo "Tailscale service enabled and started"
 
       - name: Establish Tailscale Connection
         run: |
-          set -e  # Exit on any error
-          echo "Establishing Tailscale connection..."
-          
-          # Check if auth key is available
-          if [ -z "${{ secrets.TAILSCALE_AUTH_KEY }}" ]; then
-            echo "Error: TAILSCALE_AUTH_KEY secret is not set"
-            exit 1
-          fi
-          
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          echo "Bringing up Tailscale..."
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${{ github.run_id }}
-          echo "Tailscale up command completed"
-          
-          # Wait for Tailscale to assign an IP
-          echo "Waiting for Tailscale IP assignment..."
           TS_IP=""
           retries=0
           while [ -z "$TS_IP" ] && [ $retries -lt 10 ]; do
             TS_IP=$(tailscale ip -4 || true)
             if [ -z "$TS_IP" ]; then
-              echo "Attempt $((retries+1)): Waiting for IP..."
               sleep 5
               ((retries++))
-            else
-              echo "Tailscale IP assigned: $TS_IP"
-              break
             fi
           done
-          
           if [ -z "$TS_IP" ]; then
-            echo "Error: Tailscale IP not assigned after 10 attempts. Exiting."
+            echo "Tailscale IP not assigned. Exiting."
             exit 1
           fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-          echo "Tailscale IP exported to GITHUB_ENV: $TS_IP"
 
       - name: Verify RDP Accessibility
         run: |
-          set -e  # Exit on any error
           echo "Tailscale IP: $TAILSCALE_IP"
-          
-          # Test connectivity using netcat against the Tailscale IP on port 3389
           if timeout 5 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null; then
             echo "TCP connectivity successful!"
           else
@@ -156,15 +74,12 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          set -e  # Exit on any error
           echo ""
           echo "=== RDP ACCESS ==="
           echo "Address: $TAILSCALE_IP"
           echo "Username: RDP"
           echo "Password: $(echo $env:RDP_CREDS)"
           echo "=================="
-          
-          # Keep runner active indefinitely (or until manually cancelled)
           while true; do
             echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
             sleep 300
