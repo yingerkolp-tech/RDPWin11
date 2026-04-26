@@ -26,18 +26,19 @@ jobs:
           # Restart XRDP service
           sudo systemctl restart xrdp
 
-      - name: Install Desktop Environment (XFCE4)
+      - name: Install Desktop Environment (LXDE)
         run: |
-          sudo apt-get install -y xfce4 xfce4-goodies dbus-x11
+          sudo apt-get install -y lxde-core lxappearance dbus-x11
           
-          # Configure XRDP to use XFCE desktop with dbus-launch
+          # Configure XRDP to use LXDE desktop
           sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
           #!/bin/sh
           if [ -r /etc/default/locale ]; then
             . /etc/default/locale
             export LANG LANGUAGE
           fi
-          dbus-launch --exit-with-session startxfce4
+          export XDG_CONFIG_DIRS="/etc/xdg:$XDG_CONFIG_DIRS"
+          dbus-launch --exit-with-session startlxde
           EOF
           sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl restart xrdp
