@@ -30,8 +30,15 @@ jobs:
         run: |
           sudo apt-get install -y xfce4 xfce4-goodies dbus-x11
           
-          # Configure XRDP to use XFCE desktop
-          echo "xfce4-session" | sudo tee /etc/xrdp/startwm.sh > /dev/null
+          # Configure XRDP to use XFCE desktop with dbus-launch
+          sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
+          #!/bin/sh
+          if [ -r /etc/default/locale ]; then
+            . /etc/default/locale
+            export LANG LANGUAGE
+          fi
+          dbus-launch --exit-with-session startxfce4
+          EOF
           sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl restart xrdp
 
