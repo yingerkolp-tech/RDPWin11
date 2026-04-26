@@ -11,17 +11,26 @@ jobs:
     steps:
       - name: Configure Core XRDP Settings
         run: |
+          # Install XRDP and dependencies
           sudo apt-get update
           sudo apt-get install -y xrdp ufw
+          
+          # Enable XRDP service
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
+          
+          # Configure firewall for RDP
           sudo ufw allow 3389/tcp
           sudo ufw --force enable
+          
+          # Restart XRDP service
           sudo systemctl restart xrdp
 
       - name: Install Desktop Environment (XFCE4)
         run: |
           sudo apt-get install -y xfce4 xfce4-goodies dbus-x11
+          
+          # Configure XRDP to use XFCE desktop
           echo "xfce4-session" | sudo tee /etc/xrdp/startwm.sh > /dev/null
           sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl restart xrdp
@@ -29,24 +38,33 @@ jobs:
       - name: Create RDP User with Secure Password
         id: rdp_user
         run: |
+          # Generate a secure password
           RDP_USER="RDP"
           RDP_PASS=$(openssl rand -base64 12)
+          # Create user if it doesn't exist (with --allow-bad-names to allow uppercase)
           if ! id "$RDP_USER" &>/dev/null; then
             sudo adduser --allow-bad-names --disabled-password --gecos "" "$RDP_USER"
           fi
+          # Set the password
           echo "$RDP_USER:$RDP_PASS" | sudo chpasswd
+          # Add user to groups
           sudo usermod -aG sudo "$RDP_USER" 2>/dev/null || true
           sudo usermod -aG xrdp "$RDP_USER" 2>/dev/null || true
+          # Export credentials
           echo "RDP_CREDS=User: $RDP_USER | Password: $RDP_PASS" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
+          # Install Tailscale using the official script
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo systemctl enable --now tailscaled
 
       - name: Establish Tailscale Connection
         run: |
+          # Bring up Tailscale with the provided auth key and set a unique hostname
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${{ github.run_id }}
+          
+          # Wait for Tailscale to assign an IP
           TS_IP=""
           retries=0
           while [ -z "$TS_IP" ] && [ $retries -lt 10 ]; do
@@ -56,6 +74,7 @@ jobs:
               ((retries++))
             fi
           done
+          
           if [ -z "$TS_IP" ]; then
             echo "Tailscale IP not assigned. Exiting."
             exit 1
@@ -65,6 +84,8 @@ jobs:
       - name: Verify RDP Accessibility
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
+          
+          # Test connectivity using netcat against the Tailscale IP on port 3389
           if timeout 5 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null; then
             echo "TCP connectivity successful!"
           else
@@ -78,8 +99,10 @@ jobs:
           echo "=== RDP ACCESS ==="
           echo "Address: $TAILSCALE_IP"
           echo "Username: RDP"
-          echo "Password: $(echo $env:RDP_CREDS)"
+          echo "Password: ${RDP_CREDS}"
           echo "=================="
+          
+          # Keep runner active indefinitely (or until manually cancelled)
           while true; do
             echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
             sleep 300
