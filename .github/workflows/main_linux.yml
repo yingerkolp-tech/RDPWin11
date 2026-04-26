@@ -11,26 +11,19 @@ jobs:
     steps:
       - name: Configure Core XRDP Settings
         run: |
-          # Install XRDP and dependencies
           sudo apt-get update
           sudo apt-get install -y xrdp ufw
-          
-          # Enable XRDP service
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
-          
-          # Configure firewall for RDP
           sudo ufw allow 3389/tcp
           sudo ufw --force enable
-          
-          # Restart XRDP service
           sudo systemctl restart xrdp
 
-      - name: Install Desktop Environment (LXDE)
+      - name: Install Desktop Environment (Ubuntu Desktop)
         run: |
-          sudo apt-get install -y lxde-core lxappearance dbus-x11
+          sudo apt-get install -y ubuntu-desktop dbus-x11
           
-          # Configure XRDP to use LXDE desktop
+          # Configure XRDP to use Ubuntu Desktop (GNOME)
           sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
           #!/bin/sh
           if [ -r /etc/default/locale ]; then
@@ -38,7 +31,7 @@ jobs:
             export LANG LANGUAGE
           fi
           export XDG_CONFIG_DIRS="/etc/xdg:$XDG_CONFIG_DIRS"
-          dbus-launch --exit-with-session startlxde
+          dbus-launch --exit-with-session gnome-session
           EOF
           sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl restart xrdp
