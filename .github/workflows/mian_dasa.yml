@@ -4,45 +4,25 @@ on:
   workflow_dispatch:
 
 jobs:
-  secure-vnc:
+  secure-mac-session:
     runs-on: macos-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Headless Display & VNC
-        run: |
-          # 1. Set VNC Password
-          VNC_PW="12345678"
-          
-          # 2. Update runner system password (pass existing 'runner' password)
-          sudo dscl . -passwd /Users/runner runner "$VNC_PW" 2>/dev/null || echo "runner:$VNC_PW" | sudo chpasswd 2>/dev/null || true
-          
-          # 3. Write VNC configuration directly to macOS defaults database
-          sudo defaults write /Library/Preferences/com.apple.VNCSettings.plist Password -string "$VNC_PW"
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
-
-          # 4. Enable legacy VNC password authentication cleanly (fixed kickstart syntax)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvnclegacy yes -setvncpw -vncpw "$VNC_PW"
-            
-          # 5. Activate ARD and grant privileges
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on -restart -agent -privs -all
-
-          # Save credentials to env
-          echo "VNC_USER=runner" >> $GITHUB_ENV
-          echo "VNC_PASS=$VNC_PW" >> $GITHUB_ENV
-
-      - name: Install & Start Tailscale
+      - name: Install & Configure Tailscale
         run: |
           brew install tailscale
+          
+          # Start Tailscale background daemon directly
           sudo tailscaled > /dev/null 2>&1 &
           sleep 5
 
       - name: Establish Tailscale Connection
         run: |
+          # Bring up Tailscale using the secret auth key
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-macos-$GITHUB_RUN_ID
           
+          # Poll until Tailscale assigns a 100.x.y.z IP address
           tsIP=""
           retries=0
           while [ -z "$tsIP" ] && [ $retries -lt 10 ]; do
@@ -57,20 +37,36 @@ jobs:
               echo "::error::Tailscale IP not assigned. Exiting."
               exit 1
           fi
+          
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
 
-      - name: Maintain Connection
+      - name: Launch Interactive Terminal (tmate)
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+
+      - name: Verify Network Connectivity
+        run: |
+          echo "Checking connectivity on Tailscale IP: $TAILSCALE_IP"
+          ping -c 3 $TAILSCALE_IP || echo "Ping completed."
+
+      - name: Maintain Connection & Show Access Details
         run: |
           echo ""
-          echo "========================================"
-          echo "=== VNC ACCESS READY ==="
-          echo "Address:  $TAILSCALE_IP:5900"
-          echo "Username: runner"
-          echo "Password: $VNC_PASS"
-          echo "========================================"
+          echo "=================================================="
+          echo "=== MACOS TAILSCALE SESSION READY ==="
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "OS Version:   $(sw_vers -productVersion)"
+          echo "Runner User:  runner"
+          echo "=================================================="
+          echo ""
+          echo "Check the 'Launch Interactive Terminal (tmate)' step"
+          echo "logs above for your instant Web URL and SSH access links."
+          echo "=================================================="
           echo ""
           
+          # Keep workflow alive
           while true; do
-              echo "[$(date)] VNC Active"
+              echo "[$(date)] Session active..."
               sleep 300
           done
