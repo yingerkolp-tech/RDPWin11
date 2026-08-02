@@ -1,4 +1,4 @@
-name: Dasa asd
+name: dasa asd
 
 on:
   workflow_dispatch:
@@ -22,14 +22,14 @@ jobs:
 
       - name: Set Password for Active Runner User
         run: |
-          # Generate 12 random hex characters cleanly using openssl (prevents hanging on macOS)
+          # Generate 12 random hex characters cleanly using openssl
           password=$(openssl rand -hex 6)
           
           # Mask password in GitHub Actions logs
           echo "::add-mask::$password"
           
-          # Update the password of the active 'runner' account via dscl
-          sudo dscl . -passwd /Users/runner "$password"
+          # Pass the existing default runner password ('runner') to dscl
+          sudo dscl . -passwd /Users/runner runner "$password" || echo "runner:$password" | sudo chpasswd 2>/dev/null || true
           
           # Write VNC fallback preferences
           sudo /usr/libexec/PlistBuddy -c "Add :users:runner string $password" /Library/Preferences/com.apple.VNCSettings.plist 2>/dev/null || true
@@ -41,7 +41,7 @@ jobs:
       - name: Install & Start Tailscale
         run: |
           brew install tailscale
-          # Start daemon directly in background to avoid brew services failures
+          # Start daemon directly in background
           sudo tailscaled > /dev/null 2>&1 &
           sleep 5
 
