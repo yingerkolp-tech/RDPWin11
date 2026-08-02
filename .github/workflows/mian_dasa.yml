@@ -1,5 +1,4 @@
-name: macOS VNC
-
+name: dasa Vasd
 on:
   workflow_dispatch:
 
