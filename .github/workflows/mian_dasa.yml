@@ -9,32 +9,29 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Legacy VNC & ARD Authentication
+      - name: Configure Headless Display & VNC
         run: |
-          # Load native Apple Screen Sharing service
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          # 1. Set VNC Password
+          VNC_PW="12345678"
           
-          # Generate 12 random hex characters cleanly using openssl
-          password=$(openssl rand -hex 6)
+          # 2. Update runner system password (pass existing 'runner' password)
+          sudo dscl . -passwd /Users/runner runner "$VNC_PW" 2>/dev/null || echo "runner:$VNC_PW" | sudo chpasswd 2>/dev/null || true
           
-          # Pass existing default runner password ('runner') to dscl
-          sudo dscl . -passwd /Users/runner runner "$password" || true
-          
-          # Write VNC password directly to macOS ARD legacy preference files
+          # 3. Write VNC configuration directly to macOS defaults database
+          sudo defaults write /Library/Preferences/com.apple.VNCSettings.plist Password -string "$VNC_PW"
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+
+          # 4. Enable legacy VNC password authentication cleanly (fixed kickstart syntax)
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvnclegacy -vnclegacy yes
+            -configure -clientopts -setvnclegacy yes -setvncpw -vncpw "$VNC_PW"
             
-          # Set explicit legacy VNC password
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -vncpasswd -vncpasswd "$password"
-            
-          # Activate and restart agent with full privileges
+          # 5. Activate ARD and grant privileges
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on -restart -agent -privs -all
 
-          # Save to environment variables
+          # Save credentials to env
           echo "VNC_USER=runner" >> $GITHUB_ENV
-          echo "VNC_PASS=$password" >> $GITHUB_ENV
+          echo "VNC_PASS=$VNC_PW" >> $GITHUB_ENV
 
       - name: Install & Start Tailscale
         run: |
@@ -62,19 +59,13 @@ jobs:
           fi
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
 
-      - name: Verify VNC Port
-        run: |
-          echo "Tailscale IP: $TAILSCALE_IP"
-          sleep 5
-          nc -z -w 5 "$TAILSCALE_IP" 5900 && echo "Port 5900 is open!" || echo "::warning::Port 5900 check failed, but continuing..."
-
       - name: Maintain Connection
         run: |
           echo ""
           echo "========================================"
           echo "=== VNC ACCESS READY ==="
           echo "Address:  $TAILSCALE_IP:5900"
-          echo "Username: $VNC_USER"
+          echo "Username: runner"
           echo "Password: $VNC_PASS"
           echo "========================================"
           echo ""
