@@ -25,11 +25,8 @@ jobs:
           # Generate 12 random hex characters cleanly using openssl
           password=$(openssl rand -hex 6)
           
-          # Mask password in GitHub Actions logs
-          echo "::add-mask::$password"
-          
-          # Pass the existing default runner password ('runner') to dscl
-          sudo dscl . -passwd /Users/runner runner "$password" || echo "runner:$password" | sudo chpasswd 2>/dev/null || true
+          # Pass existing default runner password ('runner') to dscl
+          sudo dscl . -passwd /Users/runner runner "$password" || true
           
           # Write VNC fallback preferences
           sudo /usr/libexec/PlistBuddy -c "Add :users:runner string $password" /Library/Preferences/com.apple.VNCSettings.plist 2>/dev/null || true
