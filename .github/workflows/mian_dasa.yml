@@ -9,27 +9,28 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Enable macOS Screen Sharing Daemon
+      - name: Configure Legacy VNC & ARD Authentication
         run: |
           # Load native Apple Screen Sharing service
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
           
-          # Force kickstart ARDAgent to bind VNC on port 5900
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -restart -agent -privs -all
-
-      - name: Set Password for Active Runner User
-        run: |
           # Generate 12 random hex characters cleanly using openssl
           password=$(openssl rand -hex 6)
           
           # Pass existing default runner password ('runner') to dscl
           sudo dscl . -passwd /Users/runner runner "$password" || true
           
-          # Write VNC fallback preferences
-          sudo /usr/libexec/PlistBuddy -c "Add :users:runner string $password" /Library/Preferences/com.apple.VNCSettings.plist 2>/dev/null || true
+          # Write VNC password directly to macOS ARD legacy preference files
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -clientopts -setvnclegacy -vnclegacy yes
+            
+          # Set explicit legacy VNC password
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -vncpasswd -vncpasswd "$password"
+            
+          # Activate and restart agent with full privileges
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on -restart -agent -privs -all
 
           # Save to environment variables
           echo "VNC_USER=runner" >> $GITHUB_ENV
@@ -38,7 +39,6 @@ jobs:
       - name: Install & Start Tailscale
         run: |
           brew install tailscale
-          # Start daemon directly in background
           sudo tailscaled > /dev/null 2>&1 &
           sleep 5
 
@@ -73,7 +73,7 @@ jobs:
           echo ""
           echo "========================================"
           echo "=== VNC ACCESS READY ==="
-          echo "Address:  vnc://$TAILSCALE_IP:5900"
+          echo "Address:  $TAILSCALE_IP:5900"
           echo "Username: $VNC_USER"
           echo "Password: $VNC_PASS"
           echo "========================================"
