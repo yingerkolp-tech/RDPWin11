@@ -1,0 +1,88 @@
+name: macOS VNC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-vnc:
+    runs-on: macos-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Enable macOS Screen Sharing Daemon
+        run: |
+          # Load native Apple Screen Sharing service
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          
+          # Force kickstart ARDAgent to bind VNC on port 5900
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -restart -agent -privs -all
+
+      - name: Set Password for Active Runner User
+        run: |
+          # Generate an alphanumeric password
+          password=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
+          
+          # Mask password in GitHub Actions logs
+          echo "::add-mask::$password"
+          
+          # Update the password of the ALREADY LOGGED IN 'runner' account
+          sudo dscl . -passwd /Users/runner "$password"
+          
+          # Write VNC fallback preferences
+          sudo /usr/libexec/PlistBuddy -c "Add :users:runner string $password" /Library/Preferences/com.apple.VNCSettings.plist 2>/dev/null || true
+
+          # Save to environment variables
+          echo "VNC_USER=runner" >> $GITHUB_ENV
+          echo "VNC_PASS=$password" >> $GITHUB_ENV
+
+      - name: Install & Start Tailscale
+        run: |
+          brew install tailscale
+          # Start daemon directly in background
+          sudo tailscaled > /dev/null 2>&1 &
+          sleep 5
+
+      - name: Establish Tailscale Connection
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-macos-$GITHUB_RUN_ID
+          
+          tsIP=""
+          retries=0
+          while [ -z "$tsIP" ] && [ $retries -lt 10 ]; do
+              tsIP=$(tailscale ip -4)
+              if [ -z "$tsIP" ]; then
+                  sleep 5
+                  retries=$((retries + 1))
+              fi
+          done
+          
+          if [ -z "$tsIP" ]; then
+              echo "::error::Tailscale IP not assigned. Exiting."
+              exit 1
+          fi
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
+
+      - name: Verify VNC Port
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          sleep 5
+          nc -z -w 5 "$TAILSCALE_IP" 5900 && echo "Port 5900 is open!" || echo "::warning::Port 5900 check failed, but continuing..."
+
+      - name: Maintain Connection
+        run: |
+          echo ""
+          echo "========================================"
+          echo "=== VNC ACCESS READY ==="
+          echo "Address:  vnc://$TAILSCALE_IP:5900"
+          echo "Username: $VNC_USER"
+          echo "Password: (See workflow log step output)"
+          echo "========================================"
+          echo ""
+          
+          while true; do
+              echo "[$(date)] VNC Active"
+              sleep 300
+          done
